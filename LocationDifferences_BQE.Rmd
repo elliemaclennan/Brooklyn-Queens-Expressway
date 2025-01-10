@@ -1,0 +1,236 @@
+---
+title: "Data preparation for spatial analysis of BQE impacted communities"
+author: "Ellie Maclennan"
+date: "2024-11-13"
+output: html_document
+---
+
+# Project: Exploring spatial differences in BQE impacts
+This project explores how communities (census blocks) differ based on their location in relation to the Brooklyn-Queens Expressway in New York, NY. In particular, the Red Hook neighborhood was explored and contrasted with neighboring communities. Census blocks data were the most granular areal unit available for analysis, and small enough to be used for group creation, explained more below. 
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Data Prep
+
+```{r, warning = FALSE, message=FALSE}
+library(dplyr)
+library(janitor)
+library(readxl)
+library(tidyverse) #this one loads dyplyr, purrr, tidyr, read r, ggplot2, tibble, string 
+library(knitr)
+
+library(sf)
+library(tmap)
+
+library(tidycensus)
+library(censusapi)
+
+library(gifski)
+library(wesanderson)
+library(purrr)
+library(rmarkdown)
+library(purrr)
+
+```
+
+Using ArcGIS Pro, Census Block (CB) communities were manually put into groups based on proximity to the BQE (near versus far) and the side of the BQE they were located, NE versus SW.
+
+```{r}
+# importing initial data and boundaries file - all from publicly-available sources
+
+# bringing in manually-created groups data
+selectedBlocks_proxSW <- read_xlsx("Data/Blocks/NYCBlock_Prox_SW_TableToExcel.xlsx")
+
+blocks_bound_asSF <- read_sf("Data/Blocks/2020 Census Blocks_20241112/geo_export_2180f1ee-03d5-4bca-8732-a0dc878d2949.shp")
+
+baseMap_boroughs <- read_sf("Data/Borough Boundaries/geo_export_091b9b46-6b29-475b-9f9e-9faac8a662e0.shp")
+
+```
+
+
+I started this project before being learning the tidycensus package. I downloaded census data from the following tables, and cleaned and rated the data using an r script. This was useful to learn more about rendering and loading files. 
+
+```{r}
+# joining all data from all tables - beginning by rendering from other files
+
+#commented out to knit now this was once executed
+
+# #reading r markdown files
+# render("DataPrep_h1.Rmd")
+# render("DataPrep_h6.Rmd")
+# render("DataPrep_h10.Rmd")
+# render("DataPrep_p13.Rmd")
+# render("DataPrep_p19.Rmd")
+
+#loading saved dfs
+h1 <- readRDS("rated_block_sf_h1.rds")
+h6 <- readRDS("rated_block_sf_h6.rds")
+h10 <- readRDS("rated_block_sf_h10.rds")
+p13 <- readRDS("rated_block_sf_p13.rds")
+p19 <- readRDS("rated_block_sf_p19.rds")
+
+
+```
+
+
+```{r}
+
+#joining the final data
+# List your spatial data frames
+
+h1_d <- st_drop_geometry(h1)
+h6_d <- st_drop_geometry(h6)
+h10_d <- st_drop_geometry(h10)
+p13_d <- st_drop_geometry(p13)
+p19_d <- st_drop_geometry(p19)
+
+fullData_all <- h1_d %>% 
+    inner_join(h6) %>% 
+    inner_join(h10) %>% 
+    inner_join(p13) %>% 
+    inner_join(p19)
+
+
+#FINAL PRODUCT
+sf_allData <- st_as_sf(fullData_all)
+
+```
+
+# Visualizing groups
+
+```{r}
+tmap_mode("plot")
+
+tm_shape(sf_allData) +
+  tm_polygons(col = "ns_div",
+              palette = c("red", "blue"),
+              title = "Location Group") 
+
+tm_shape(sf_allData) +
+  tm_polygons(col = "buffer_prox",
+              palette = c("red", "blue"),
+              title = "Location Group") 
+
+```
+
+now making maps through a function or mapping through?
+```{r}
+#getting DV names
+dv_names <- colnames(sf_allData[c(5, 7:16)])
+dv_names <- dv_names[1:11]
+
+dv_titles <- c("Total Population", "Proportion White", "Proportion Black", "Proportion Owner", "Prop. Owners-White", "Prop. Renter-White", "Median Ages-All", "Median Age-Men", "Median Age-Woman", "Prop. 65+ Present", "Prop. No 65+ Present")
+
+```
+
+
+
+```{r}
+
+# defining the function to create a map for a given column
+create_map <- function(column_name, title, data, baseMap_boroughs) {
+    tm_shape(data) +
+    tm_polygons(col = column_name,
+                palette = "Blues",
+                title = title) +  
+    tm_shape(baseMap_boroughs) +
+    tm_borders(col = "lightgrey", lwd = 1) +  #borough boundaries
+    tm_layout(title = title, legend.position = c("right", "top"), title.position = c("left", "bottom")) +
+    tm_view(bbox = st_bbox(data))  # Zoom to the extent of the rated_block_sf
+}
+
+# listing  column names to iterate through 
+dv_names <- colnames(sf_allData[c(5, 7:16)])
+dv_names <- dv_names[1:11]
+
+
+# using purrr::map to generate maps for each column in dv_names and corresponding title
+map_list <- map2(dv_names, dv_titles, ~ create_map(.x, .y, sf_allData, baseMap_boroughs))
+
+#seeing created list of maps
+map_list
+
+```
+
+```{r, message = FALSE, include = FALSE}
+# how to the animate if want looping through maps (GIF)
+tmap_animation(
+  tm = map_list,
+  filename = "dv_column_animation.gif",
+  delay = 400,  # Adjust delay as needed
+  width = 800,
+  height = 600
+)
+```
+
+
+# Hazards data
+Do communities differ in exposure to total hazards depending on their location to the BQE?
+
+```{r}
+# adding hazards data from NCDP's Hazard Index
+
+hazards_data <- read_sf("Data/Hazards/HazardsIndexSum_nyc_boroughs/HazardsIndexSum_nyc_boroughs.shp")
+
+```
+
+
+```{r}
+
+#ensuring datasets all in the same projection
+sf_allData <- sf_allData %>% 
+    st_transform(crs = 2263)
+
+hazards_data_clip <- hazards_data %>% 
+    st_transform(crs = 2263) %>% 
+    st_intersection(sf_allData)
+
+ns_diss_bound <- sf_allData %>% 
+    group_by(ns_div) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") 
+
+buffer_prox_bound <- sf_allData %>% 
+    group_by(buffer_prox) %>%
+    summarise(geometry = st_union(geometry), .groups = "drop") 
+
+tm_shape(baseMap_boroughs, bbox = st_bbox(hazards_data_clip)) + 
+    tm_borders(col = "lightgrey", lwd = 1) +
+    tm_shape(hazards_data_clip) +
+    tm_polygons(col = "hazsum5", lwd = 0, title = "Hazard Index") +
+    tm_layout(
+        title = "By Blocks", 
+        title.size = 1.2, 
+        title.position = c("right", "top"), 
+        legend.position = c("left", "bottom")
+    ) +
+    tm_shape(ns_diss_bound) +  
+    tm_borders(lwd = 3, col = "lightgrey")+
+    tm_shape(buffer_prox_bound) +
+    tm_borders(lwd = 2, col = "darkgrey")+
+    tm_compass(type = "4star", position = c("right", "top"), size = 1)
+
+```
+
+```{r}
+#joining hazard data with census & groups data
+joinedWithHazard <- sf_allData %>% 
+    st_join(hazards_data_clip)
+```
+
+## Testing for Significant Differences 
+```{r}
+#t-test for hazards - checking if significantly different
+
+#ns div - signif.
+t.test(hazsum5 ~ ns_div.x, data = joinedWithHazard)
+
+#proximity - signif.
+t.test(hazsum5 ~ buffer_prox.x, data = joinedWithHazard)
+
+```
+
+# Conclusion
+Therefore, in addition to community differences across spatial groups, there is also a significant difference between NE and SW census blocks, as well as between near vs far census blocks. However, it appears the difference is more meaningfully related to the **side** of the BQE communities reside, where most hazards are faced by communities SW of the BQE. Consequently, planning initiatives should consider **both** the demographic differences of communities depending on their location, as well as the associated hazard risk related to location. 
+
